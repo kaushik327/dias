@@ -1135,11 +1135,12 @@ class MultipleStrInCol:
 
 class FuseIsIn:
   def __init__(self, binop_encl: OptEnclosed[ast.BinOp], the_call: ast.Call,
-               left_name: ast.Name, right_name: ast.Name) -> None:
+               left_name: ast.Name, right_name: ast.Name, the_ser: SeriesCall) -> None:
     self.binop_encl = binop_encl
     self.the_call = the_call
     self.left_name = left_name
     self.right_name = right_name
+    self.the_ser = the_ser
 
 def is_fuse_isin(binop_encl: OptEnclosed[ast.BinOp]) -> Optional[FuseIsIn]:
   binop = binop_encl.get_obj()
@@ -1177,9 +1178,11 @@ def is_fuse_isin(binop_encl: OptEnclosed[ast.BinOp]) -> Optional[FuseIsIn]:
     return None
   # Any of the two
   the_call = left_call
+  the_ser = left_ser
 
   return FuseIsIn(binop_encl=binop_encl, the_call=the_call,
-                  left_name=left_name, right_name=right_name)
+                  left_name=left_name, right_name=right_name,
+                  the_ser=the_ser)
 
 def is_str_attr_on_sub(str_attr: ast.AST) -> Optional[CompatSub]:
   if (not isinstance(str_attr, ast.Attribute) or
@@ -1447,6 +1450,39 @@ def is_fuse_apply(attr_call: AttrCall) -> Optional[FuseApply]:
   return FuseApply(right_apply=right_apply, left_apply=left_apply)
    
   
+class LenUnique:
+  def __init__(self, enclosed_call: OptEnclosed[ast.Call], series: ast.AST):
+    self.enclosed_call = enclosed_call
+    self.series = series
+
+def is_len_unique(enclosed_call: OptEnclosed[ast.Call]) -> Optional[LenUnique]:
+  # Matching len(x.unique()), for any x
+  len_call = enclosed_call.get_obj()
+  if not isinstance(len_call, ast.Call): # redundant
+    return None
+  if len(len_call.args) != 1 or len_call.keywords != []:
+    return None
+
+  len_function = len_call.func
+  if not isinstance(len_function, ast.Name):
+    return False
+  if len_function.id != 'len':
+    return False
+  
+  unique_call = len_call.args[0]
+  if not isinstance(unique_call, ast.Call):
+    return None
+  if unique_call.args != [] or unique_call.keywords != []:
+    return None
+  
+  unique_func = unique_call.func
+  if not isinstance(unique_func, ast.Attribute):
+    return None
+  if unique_func.attr != 'unique':
+    return None
+
+  return LenUnique(enclosed_call=enclosed_call, series=unique_func.value)
+
 
 # Dispatch all the ugliness of what pattern we have recognized here.
 # Because we can return immediately, we don't have to have a ridiculously
@@ -1473,7 +1509,8 @@ Union[
   FuseApply,
   StrSplitPython,
   StrAttrIndexed,
-  SubToSubReplace
+  SubToSubReplace,
+  LenUnique
 ]
 def recognize_pattern(stmt: ast.stmt) ->  Optional[Single_Stmt_Patts]:
   # Start with the trivial patterns.
@@ -1595,6 +1632,9 @@ def recognize_pattern(stmt: ast.stmt) ->  Optional[Single_Stmt_Patts]:
         if sort_head is not None:
           return sort_head
       ## END OF ATTR CALL IF ##
+      len_unique = is_len_unique(enclosed_call)
+      if len_unique is not None:
+        return len_unique
 
   if len(str_in_cols) != 0:
     return MultipleStrInCol(str_in_cols=str_in_cols)
